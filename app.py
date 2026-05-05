@@ -268,10 +268,11 @@ class GestorTurnosWeb:
         return True, ["✅ Intercambio realizado correctamente"]
     
     def obtener_bytes(self):
+        """Devuelve el archivo Excel modificado como bytes (listo para descarga)."""
         output = BytesIO()
         self.wb.save(output)
         output.seek(0)
-        return output
+        return output.getvalue()
 
 
 # ============================================================
@@ -522,28 +523,25 @@ with tab4:
         ])
         st.dataframe(df_contador, use_container_width=True)
 
-# Tab 5: Guardar
+# Tab 5: Guardar (CORREGIDA - sin botón anidado)
 with tab5:
     st.header("💾 Guardar cambios")
     
     st.info(f"Se han realizado {len(gestor.intercambios)} intercambio(s)")
     
-    col_s1, col_s2 = st.columns(2)
-    with col_s1:
-        if st.button("📥 Descargar archivo modificado", type="primary", use_container_width=True):
-            with st.spinner("Generando archivo..."):
-                bytes_data = gestor.obtener_bytes()
-                st.download_button(
-                    label="⬇️ Hacer clic para descargar",
-                    data=bytes_data,
-                    file_name="turnos_mayo_2026_modificado.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-                st.success("✅ Archivo listo para descargar")
+    # Ahora el botón de descarga está siempre presente.
+    # data=gestor.obtener_bytes es una función que se ejecutará solo al hacer clic.
+    # Devuelve los bytes del archivo listo para descargar.
+    st.download_button(
+        label="📥 Descargar archivo modificado",
+        data=gestor.obtener_bytes,   # <-- callable que genera los bytes bajo demanda
+        file_name="turnos_mayo_2026_modificado.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
     
-    with col_s2:
-        if st.button("🔄 Reiniciar sesión", use_container_width=True):
-            st.session_state.gestor = None
-            st.session_state.archivo_cargado = False
-            st.rerun()
+    st.markdown("---")
+    if st.button("🔄 Reiniciar sesión", use_container_width=True):
+        st.session_state.gestor = None
+        st.session_state.archivo_cargado = False
+        st.rerun()
