@@ -4,8 +4,6 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from io import BytesIO
-import tempfile
-import os
 
 # ============================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -26,14 +24,12 @@ MAX_DIAS_CONSECUTIVOS = 6
 MAX_DIAS_MES = 22
 
 ZONAS_COMPATIBLES = {
-    "LINEA_3": ["LINEA_3", "ALBORAYA", "AV_CID", "ALAMEDA"],
+    "LINEA_3": ["LINEA_3", "ALBORAYA"],
     "ZONA_6": ["ZONA_6", "ZONA_7"],
     "ZONA_7": ["ZONA_6", "ZONA_7", "ZONA_8"],
     "ZONA_8": ["ZONA_7", "ZONA_8"],
     "AEROPORT": ["AEROPORT", "MARITIM"],
     "MARITIM": ["AEROPORT", "MARITIM"],
-    "FOIOS": ["FOIOS"],
-    "MASSAMAGRELL": ["MASSAMAGRELL"],
 }
 
 # Días de la semana en español para mayo 2026
@@ -57,7 +53,6 @@ class GestorTurnosWeb:
         self.intercambios = []
         self.contador_intercambios = defaultdict(int)
         self.deudas = defaultdict(int)
-        self.archivo_original_bytes = archivo_bytes
         
         if archivo_bytes:
             self.cargar_archivo(archivo_bytes)
@@ -81,7 +76,7 @@ class GestorTurnosWeb:
         zona_actual = "DESCONOCIDA"
         self.agentes = {}
         
-        for fila in range(1, 350):
+        for fila in range(1, 300):
             celda_a = self.ws[f"A{fila}"].value
             if celda_a and isinstance(celda_a, str):
                 for keyword, zona in zonas_keywords.items():
@@ -89,22 +84,48 @@ class GestorTurnosWeb:
                         zona_actual = zona
                         break
             
-            # Leer columna D (nombres)
+            # LEO LA COLUMNA D (columna 4) para los nombres de agentes
             nombre_celda = self.ws[f"D{fila}"].value
             if nombre_celda and isinstance(nombre_celda, str):
                 nombre = nombre_celda.strip()
-                if nombre and len(nombre) > 2:
-                    if nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2", "CF"]:
-                        if not nombre.isdigit():
-                            es_zona = any(kw.upper() in nombre.upper() for kw in zonas_keywords.keys())
-                            if not es_zona and nombre not in self.agentes:
-                                self.agentes[nombre] = {"fila": fila, "zona": zona_actual}
+                # Filtrar nombres válidos (no cabeceras, no números, no vacíos)
+                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2"]:
+                    if not nombre.isdigit() and len(nombre) > 2:
+                        es_zona = False
+                        for keyword in zonas_keywords.keys():
+                            if keyword.upper() in nombre.upper():
+                                es_zona = True
+                                break
+                        if not es_zona:
+                            self.agentes[nombre] = {"fila": fila, "zona": zona_actual}
+        
+        # También buscar en columna C por si acaso (algunos agentes pueden estar ahí)
+        for fila in range(1, 300):
+            celda_a = self.ws[f"A{fila}"].value
+            if celda_a and isinstance(celda_a, str):
+                for keyword, zona in zonas_keywords.items():
+                    if keyword.upper() in celda_a.upper():
+                        zona_actual = zona
+                        break
+            
+            nombre_celda = self.ws[f"C{fila}"].value
+            if nombre_celda and isinstance(nombre_celda, str):
+                nombre = nombre_celda.strip()
+                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2", "CF"]:
+                    if not nombre.isdigit() and len(nombre) > 2 and nombre not in self.agentes:
+                        es_zona = False
+                        for keyword in zonas_keywords.keys():
+                            if keyword.upper() in nombre.upper():
+                                es_zona = True
+                                break
+                        if not es_zona:
+                            self.agentes[nombre] = {"fila": fila, "zona": zona_actual}
     
     def cargar_turnos(self):
         for nombre, info in self.agentes.items():
             fila = info["fila"]
             for dia in range(1, 32):
-                col_num = (dia * 2) + 3
+                col_num = (dia * 2) + 3  # E=5, G=7, I=9...
                 col = get_column_letter(col_num)
                 celda = self.ws[f"{col}{fila}"]
                 turno = celda.value if celda.value else ""
@@ -247,7 +268,6 @@ class GestorTurnosWeb:
         return True, ["✅ Intercambio realizado correctamente"]
     
     def obtener_bytes(self):
-        """Guarda el archivo en BytesIO y lo devuelve"""
         output = BytesIO()
         self.wb.save(output)
         output.seek(0)
@@ -268,7 +288,7 @@ def mostrar_cuadrante_mensual(turnos, nombre_agente, gestor):
         
         if turno in ["D", "E"]:
             icono = "🟢"
-        elif turno in ["VC", "LC", "M", "MOD", "RFM", "PS"]:
+        elif turno in ["VC", "LC", "M", "MOD"]:
             icono = "🟡"
         elif turno and turno not in ["", None]:
             icono = "🔵"
@@ -313,13 +333,10 @@ def mostrar_cuadrante_mensual(turnos, nombre_agente, gestor):
 st.title("🏭 Gestor de Intercambios de Turnos - Mayo 2026")
 st.markdown("---")
 
-# Inicializar estado
 if "gestor" not in st.session_state:
     st.session_state.gestor = None
 if "archivo_cargado" not in st.session_state:
     st.session_state.archivo_cargado = False
-if "ultimo_bytes" not in st.session_state:
-    st.session_state.ultimo_bytes = None
 
 # Sidebar
 with st.sidebar:
@@ -366,7 +383,7 @@ if not st.session_state.archivo_cargado:
 
 gestor = st.session_state.gestor
 
-# Obtener lista de agentes
+# Obtener lista de agentes para los selectores
 lista_agentes = sorted(list(gestor.agentes.keys()))
 
 # Tabs
@@ -434,8 +451,6 @@ with tab1:
                     if exito:
                         st.success("✅ Intercambio realizado correctamente")
                         st.balloons()
-                        # Forzar actualización de la sesión
-                        st.rerun()
                     else:
                         for msg in mensajes:
                             st.error(msg)
@@ -507,37 +522,28 @@ with tab4:
         ])
         st.dataframe(df_contador, use_container_width=True)
 
-# Tab 5: Guardar - VERSIÓN CORREGIDA
+# Tab 5: Guardar
 with tab5:
     st.header("💾 Guardar cambios")
     
     st.info(f"Se han realizado {len(gestor.intercambios)} intercambio(s)")
     
-    # Generar el archivo modificado
-    archivo_modificado = gestor.obtener_bytes()
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        if st.button("📥 Descargar archivo modificado", type="primary", use_container_width=True):
+            with st.spinner("Generando archivo..."):
+                bytes_data = gestor.obtener_bytes()
+                st.download_button(
+                    label="⬇️ Hacer clic para descargar",
+                    data=bytes_data,
+                    file_name="turnos_mayo_2026_modificado.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                st.success("✅ Archivo listo para descargar")
     
-    # Botón de descarga - SOLUCIÓN DEFINITIVA
-    st.download_button(
-        label="📥 DESCARGAR ARCHIVO MODIFICADO",
-        data=archivo_modificado,
-        file_name="turnos_mayo_2026_modificado.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True,
-        type="primary"
-    )
-    
-    st.markdown("---")
-    st.markdown("""
-    ### 📌 Instrucciones:
-    1. Haz clic en el botón de arriba para descargar el archivo
-    2. Guarda el archivo en tu ordenador
-    3. Ábrelo con Excel para ver los cambios
-    4. Si necesitas hacer más cambios, vuelve a subir el archivo modificado
-    """)
-    
-    # Mostrar resumen de cambios
-    if gestor.intercambios:
-        st.markdown("---")
-        st.subheader("📝 Últimos cambios realizados")
-        for intercambio in gestor.intercambios[-5:]:  # Mostrar últimos 5
-            st.write(f"- Día {intercambio['dia']}: {intercambio['nombre1']} ↔ {intercambio['nombre2']}")
+    with col_s2:
+        if st.button("🔄 Reiniciar sesión", use_container_width=True):
+            st.session_state.gestor = None
+            st.session_state.archivo_cargado = False
+            st.rerun()
