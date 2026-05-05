@@ -4,7 +4,6 @@ from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
 from collections import defaultdict
 from io import BytesIO
-import calendar
 
 # ============================================================
 # CONFIGURACIÓN DE LA PÁGINA
@@ -34,13 +33,10 @@ ZONAS_COMPATIBLES = {
 }
 
 # Días de la semana en español para mayo 2026
-# 1 de mayo de 2026 es viernes (V)
 NOMBRES_DIAS = ["L", "M", "X", "J", "V", "S", "D"]
 DIAS_SEMANA_MAYO = []
 for dia in range(1, 32):
-    # 1 de mayo 2026 es viernes (índice 4 si empezamos lunes=0)
-    # lunes=0, martes=1, miércoles=2, jueves=3, viernes=4, sábado=5, domingo=6
-    indice = (dia + 3) % 7  # Ajustado para que 1 = viernes
+    indice = (dia + 3) % 7
     DIAS_SEMANA_MAYO.append(NOMBRES_DIAS[indice])
 
 
@@ -77,21 +73,28 @@ class GestorTurnosWeb:
         }
         
         zona_actual = "DESCONOCIDA"
+        self.agentes = {}  # Limpiar antes de detectar
         
         for fila in range(1, 300):
             celda_a = self.ws[f"A{fila}"].value
             if celda_a and isinstance(celda_a, str):
                 for keyword, zona in zonas_keywords.items():
-                    if keyword in celda_a.upper():
+                    if keyword.upper() in celda_a.upper():
                         zona_actual = zona
                         break
             
             nombre_celda = self.ws[f"C{fila}"].value
             if nombre_celda and isinstance(nombre_celda, str):
                 nombre = nombre_celda.strip()
-                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", ""]:
-                    if not nombre.isdigit() and len(nombre) > 3:
-                        es_zona = any(kw in nombre.upper() for kw in zonas_keywords.keys())
+                # Filtrar nombres válidos (no cabeceras, no números, no vacíos)
+                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2"]:
+                    if not nombre.isdigit() and len(nombre) > 2:
+                        # Verificar que no sea una cabecera de zona
+                        es_zona = False
+                        for keyword in zonas_keywords.keys():
+                            if keyword.upper() in nombre.upper():
+                                es_zona = True
+                                break
                         if not es_zona:
                             self.agentes[nombre] = {"fila": fila, "zona": zona_actual}
     
@@ -109,7 +112,6 @@ class GestorTurnosWeb:
         return self.turnos.get((nombre, dia), "")
     
     def obtener_todos_turnos(self, nombre):
-        """Devuelve un diccionario con todos los turnos del mes"""
         return {dia: self.obtener_turno(nombre, dia) for dia in range(1, 32)}
     
     def obtener_tipo_turno(self, turno):
@@ -253,10 +255,9 @@ class GestorTurnosWeb:
 # FUNCIONES DE VISUALIZACIÓN
 # ============================================================
 
-def mostrar_cuadrante_mensual(turnos, nombre_agente):
+def mostrar_cuadrante_mensual(turnos, nombre_agente, gestor):
     """Muestra una tabla con todos los días del mes y sus turnos"""
     
-    # Crear DataFrame
     data = []
     for dia in range(1, 32):
         turno = turnos.get(dia, "")
@@ -264,19 +265,19 @@ def mostrar_cuadrante_mensual(turnos, nombre_agente):
         
         # Color según tipo de día
         if turno in ["D", "E"]:
-            color = "🟢"  # Descanso - Verde
+            icono = "🟢"
         elif turno in ["VC", "LC", "M", "MOD"]:
-            color = "🟡"  # Servicios especiales - Amarillo
+            icono = "🟡"
         elif turno and turno not in ["", None]:
-            color = "🔵"  # Trabajado - Azul
+            icono = "🔵"
         else:
-            color = "⚪"  # Vacío - Blanco
+            icono = "⚪"
         
         data.append({
             "Día": dia,
             "Semana": dia_semana,
             "Turno": turno if turno else "-",
-            "Tipo": color
+            "": icono
         })
     
     df = pd.DataFrame(data)
@@ -285,30 +286,16 @@ def mostrar_cuadrante_mensual(turnos, nombre_agente):
     trabajados = sum(1 for d in range(1, 32) if turnos.get(d) and turnos.get(d) not in ["D", "E", ""])
     descansos = sum(1 for d in range(1, 32) if turnos.get(d) in ["D", "E"])
     
-    st.markdown(f"### 📅 Cuadrante de {nombre_agente}")
-    
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("📊 Días trabajados", trabajados, delta=f"máx {MAX_DIAS_MES}")
     with col2:
         st.metric("🟢 Descansos", descansos)
     with col3:
-        st.metric("🔄 Intercambios", st.session_state.gestor.contador_intercambios.get(nombre_agente, 0))
+        st.metric("🔄 Intercambios", gestor.contador_intercambios.get(nombre_agente, 0))
     
-    # Mostrar tabla
-    st.dataframe(
-        df,
-        column_config={
-            "Día": st.column_config.NumberColumn("Día", width="small"),
-            "Semana": st.column_config.TextColumn("Semana", width="small"),
-            "Turno": st.column_config.TextColumn("Turno", width="small"),
-            "Tipo": st.column_config.TextColumn("", width="small"),
-        },
-        use_container_width=True,
-        hide_index=True
-    )
+    st.dataframe(df, use_container_width=True, hide_index=True)
     
-    # Mostrar leyenda
     with st.expander("📖 Leyenda"):
         st.markdown("""
         - 🔵 **Azul**: Día trabajado
@@ -347,6 +334,13 @@ with st.sidebar:
                 st.session_state.gestor = gestor
                 st.session_state.archivo_cargado = True
                 st.success(f"✅ Cargados {len(gestor.agentes)} agentes")
+                
+                # Mostrar los primeros agentes para depuración
+                with st.expander("📋 Ver agentes detectados"):
+                    for i, nombre in enumerate(list(gestor.agentes.keys())[:20]):
+                        st.write(f"{i+1}. {nombre}")
+                    if len(gestor.agentes) > 20:
+                        st.write(f"... y {len(gestor.agentes)-20} más")
             else:
                 st.error("❌ Error al cargar el archivo")
     
@@ -368,6 +362,9 @@ if not st.session_state.archivo_cargado:
 
 gestor = st.session_state.gestor
 
+# Obtener lista de agentes para los selectores
+lista_agentes = sorted(list(gestor.agentes.keys()))
+
 # Tabs
 tab1, tab2, tab3, tab4, tab5 = st.tabs(["🔄 Realizar Intercambio", "📅 Ver Cuadrante", "📋 Agentes", "📊 Resumen", "💾 Guardar"])
 
@@ -378,33 +375,18 @@ with tab1:
     col1, col2 = st.columns(2)
     
     with col1:
-        busqueda1 = st.text_input("🔍 Buscar agente 1", placeholder="Escribe parte del nombre...", key="busq1")
-        agentes_filtrados1 = [a for a in gestor.agentes.keys() if busqueda1.upper() in a.upper()] if busqueda1 else list(gestor.agentes.keys())
-        agente1 = st.selectbox("👤 Selecciona agente 1", agentes_filtrados1, key="agente1")
-        
+        agente1 = st.selectbox("👤 Selecciona agente 1", lista_agentes, key="agente1")
         if agente1:
             zona1 = gestor.agentes[agente1]["zona"]
             intercambios1 = gestor.contador_intercambios.get(agente1, 0)
             st.caption(f"Zona: {zona1} | Intercambios: {intercambios1}/{MAX_INTERCAMBIOS_POR_AGENTE}")
-            
-            # Botón para ver cuadrante del agente 1
-            if st.button(f"📅 Ver cuadrante de {agente1[:20]}", key="ver1"):
-                turnos = gestor.obtener_todos_turnos(agente1)
-                mostrar_cuadrante_mensual(turnos, agente1)
     
     with col2:
-        busqueda2 = st.text_input("🔍 Buscar agente 2", placeholder="Escribe parte del nombre...", key="busq2")
-        agentes_filtrados2 = [a for a in gestor.agentes.keys() if busqueda2.upper() in a.upper()] if busqueda2 else list(gestor.agentes.keys())
-        agente2 = st.selectbox("👤 Selecciona agente 2", agentes_filtrados2, key="agente2")
-        
+        agente2 = st.selectbox("👤 Selecciona agente 2", lista_agentes, key="agente2")
         if agente2:
             zona2 = gestor.agentes[agente2]["zona"]
             intercambios2 = gestor.contador_intercambios.get(agente2, 0)
             st.caption(f"Zona: {zona2} | Intercambios: {intercambios2}/{MAX_INTERCAMBIOS_POR_AGENTE}")
-            
-            if st.button(f"📅 Ver cuadrante de {agente2[:20]}", key="ver2"):
-                turnos = gestor.obtener_todos_turnos(agente2)
-                mostrar_cuadrante_mensual(turnos, agente2)
     
     dia = st.slider("📅 Día del mes", 1, 31, 15)
     
@@ -452,21 +434,16 @@ with tab1:
                         for msg in mensajes:
                             st.error(msg)
 
-# Tab 2: Ver Cuadrante de cualquier agente
+# Tab 2: Ver Cuadrante
 with tab2:
     st.header("📅 Ver cuadrante mensual de un agente")
     
-    busqueda_cuadrante = st.text_input("🔍 Buscar agente", placeholder="Escribe el nombre del agente...")
-    agentes_cuadrante = [a for a in gestor.agentes.keys() if busqueda_cuadrante.upper() in a.upper()] if busqueda_cuadrante else list(gestor.agentes.keys())
+    agente_cuadrante = st.selectbox("👤 Selecciona un agente", lista_agentes, key="cuadrante_select")
     
-    if agentes_cuadrante:
-        agente_seleccionado = st.selectbox("👤 Selecciona agente", agentes_cuadrante, key="cuadrante_select")
-        
-        if agente_seleccionado:
-            turnos = gestor.obtener_todos_turnos(agente_seleccionado)
-            mostrar_cuadrante_mensual(turnos, agente_seleccionado)
-    else:
-        st.info("Escribe el nombre de un agente para ver su cuadrante")
+    if agente_cuadrante:
+        if st.button("📊 Mostrar cuadrante", use_container_width=True):
+            turnos = gestor.obtener_todos_turnos(agente_cuadrante)
+            mostrar_cuadrante_mensual(turnos, agente_cuadrante, gestor)
 
 # Tab 3: Agentes
 with tab3:
@@ -490,13 +467,10 @@ with tab3:
     cols = st.columns(3)
     for idx, (nombre, info) in enumerate(sorted(agentes_mostrar)):
         with cols[idx % 3]:
-            with st.expander(f"{nombre[:30]}"):
+            with st.expander(f"{nombre[:40]}"):
                 st.text(f"📍 Fila: {info['fila']}")
                 st.text(f"🏢 Zona: {info['zona']}")
                 st.text(f"🔄 Intercambios: {gestor.contador_intercambios.get(nombre, 0)}")
-                if st.button(f"📅 Ver cuadrante", key=f"btn_{nombre[:20]}"):
-                    turnos = gestor.obtener_todos_turnos(nombre)
-                    mostrar_cuadrante_mensual(turnos, nombre)
 
 # Tab 4: Resumen
 with tab4:
@@ -548,7 +522,7 @@ with tab5:
                 st.success("✅ Archivo listo para descargar")
     
     with col_s2:
-        if st.button("🔄 Reiniciar", use_container_width=True):
+        if st.button("🔄 Reiniciar sesión", use_container_width=True):
             st.session_state.gestor = None
             st.session_state.archivo_cargado = False
             st.rerun()
