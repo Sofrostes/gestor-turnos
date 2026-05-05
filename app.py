@@ -65,6 +65,7 @@ class GestorTurnosWeb:
         return True
     
     def detectar_agentes(self):
+        """Detecta agentes en la columna D"""
         zonas_keywords = {
             "ALBORAYA": "ALBORAYA", "AV. DEL CID": "AV_CID", "ALAMEDA": "ALAMEDA",
             "FOIOS": "FOIOS", "MASSAMAGRELL": "MASSAMAGRELL", "AEROPORT": "AEROPORT",
@@ -73,8 +74,32 @@ class GestorTurnosWeb:
         }
         
         zona_actual = "DESCONOCIDA"
-        self.agentes = {}  # Limpiar antes de detectar
+        self.agentes = {}
         
+        for fila in range(1, 300):
+            celda_a = self.ws[f"A{fila}"].value
+            if celda_a and isinstance(celda_a, str):
+                for keyword, zona in zonas_keywords.items():
+                    if keyword.upper() in celda_a.upper():
+                        zona_actual = zona
+                        break
+            
+            # LEO LA COLUMNA D (columna 4) para los nombres de agentes
+            nombre_celda = self.ws[f"D{fila}"].value
+            if nombre_celda and isinstance(nombre_celda, str):
+                nombre = nombre_celda.strip()
+                # Filtrar nombres válidos (no cabeceras, no números, no vacíos)
+                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2"]:
+                    if not nombre.isdigit() and len(nombre) > 2:
+                        es_zona = False
+                        for keyword in zonas_keywords.keys():
+                            if keyword.upper() in nombre.upper():
+                                es_zona = True
+                                break
+                        if not es_zona:
+                            self.agentes[nombre] = {"fila": fila, "zona": zona_actual}
+        
+        # También buscar en columna C por si acaso (algunos agentes pueden estar ahí)
         for fila in range(1, 300):
             celda_a = self.ws[f"A{fila}"].value
             if celda_a and isinstance(celda_a, str):
@@ -86,10 +111,8 @@ class GestorTurnosWeb:
             nombre_celda = self.ws[f"C{fila}"].value
             if nombre_celda and isinstance(nombre_celda, str):
                 nombre = nombre_celda.strip()
-                # Filtrar nombres válidos (no cabeceras, no números, no vacíos)
-                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2"]:
-                    if not nombre.isdigit() and len(nombre) > 2:
-                        # Verificar que no sea una cabecera de zona
+                if nombre and nombre not in ["0", "AGENTE", "COD.", "EST.", "NOMBRE", "", "DESPLAZADO 1", "DESPLAZADO 2", "CF"]:
+                    if not nombre.isdigit() and len(nombre) > 2 and nombre not in self.agentes:
                         es_zona = False
                         for keyword in zonas_keywords.keys():
                             if keyword.upper() in nombre.upper():
@@ -102,7 +125,7 @@ class GestorTurnosWeb:
         for nombre, info in self.agentes.items():
             fila = info["fila"]
             for dia in range(1, 32):
-                col_num = (dia * 2) + 3
+                col_num = (dia * 2) + 3  # E=5, G=7, I=9...
                 col = get_column_letter(col_num)
                 celda = self.ws[f"{col}{fila}"]
                 turno = celda.value if celda.value else ""
@@ -263,7 +286,6 @@ def mostrar_cuadrante_mensual(turnos, nombre_agente, gestor):
         turno = turnos.get(dia, "")
         dia_semana = DIAS_SEMANA_MAYO[dia-1]
         
-        # Color según tipo de día
         if turno in ["D", "E"]:
             icono = "🟢"
         elif turno in ["VC", "LC", "M", "MOD"]:
@@ -282,7 +304,6 @@ def mostrar_cuadrante_mensual(turnos, nombre_agente, gestor):
     
     df = pd.DataFrame(data)
     
-    # Estadísticas
     trabajados = sum(1 for d in range(1, 32) if turnos.get(d) and turnos.get(d) not in ["D", "E", ""])
     descansos = sum(1 for d in range(1, 32) if turnos.get(d) in ["D", "E"])
     
@@ -335,12 +356,12 @@ with st.sidebar:
                 st.session_state.archivo_cargado = True
                 st.success(f"✅ Cargados {len(gestor.agentes)} agentes")
                 
-                # Mostrar los primeros agentes para depuración
                 with st.expander("📋 Ver agentes detectados"):
-                    for i, nombre in enumerate(list(gestor.agentes.keys())[:20]):
-                        st.write(f"{i+1}. {nombre}")
-                    if len(gestor.agentes) > 20:
-                        st.write(f"... y {len(gestor.agentes)-20} más")
+                    for i, nombre in enumerate(list(gestor.agentes.keys())[:30]):
+                        info = gestor.agentes[nombre]
+                        st.write(f"{i+1}. {nombre} (fila {info['fila']}, zona: {info['zona']})")
+                    if len(gestor.agentes) > 30:
+                        st.write(f"... y {len(gestor.agentes)-30} más")
             else:
                 st.error("❌ Error al cargar el archivo")
     
