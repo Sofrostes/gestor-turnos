@@ -523,23 +523,24 @@ with tab4:
         ])
         st.dataframe(df_contador, use_container_width=True)
 
-# Tab 5: Guardar (CORREGIDA - sin botón anidado)
+# Tab 5: Guardar (CORREGIDA - descarga garantizada)
 with tab5:
     st.header("💾 Guardar cambios")
-    
     st.info(f"Se han realizado {len(gestor.intercambios)} intercambio(s)")
-    
-    # Ahora el botón de descarga está siempre presente.
-    # data=gestor.obtener_bytes es una función que se ejecutará solo al hacer clic.
-    # Devuelve los bytes del archivo listo para descargar.
+
+    # Generamos los bytes del archivo justo antes del botón
+    # Esto se ejecuta cada vez que la app se renderiza,
+    # pero es rápido y garantiza que los datos estén actualizados.
+    archivo_bytes = gestor.obtener_bytes()   # ¡con paréntesis!
+
     st.download_button(
         label="📥 Descargar archivo modificado",
-        data=gestor.obtener_bytes,   # <-- callable que genera los bytes bajo demanda
+        data=archivo_bytes,   # pasa los bytes directamente
         file_name="turnos_mayo_2026_modificado.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True
     )
-    
+
     st.markdown("---")
     if st.button("🔄 Reiniciar sesión", use_container_width=True):
         st.session_state.gestor = None
